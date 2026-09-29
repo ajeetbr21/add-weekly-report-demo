@@ -242,11 +242,12 @@ server is constructible more than once.
 
 ### Repository structure
 
-**22. The work was initially placed in the wrong repository.**
-The brief said "empty Git repository", but `ajeetbr21/Agent` contained an unrelated VS Code extension
-(LeechCode) on `main` plus an open PR. Building there would have mixed two unrelated projects.
-*Fix:* the platform moved to its own repository at root level, and `ajeetbr21/Agent` was restored to
-pristine `origin/main` — nothing was ever pushed to it and the temporary branch was deleted.
+**22. The work was initially placed in a repository that was not empty.**
+The brief described an empty repository, but the one provided already held an unrelated project on `main`
+plus an open pull request. Building there would have mixed two unrelated codebases into one history.
+*Fix:* Atlas moved to this dedicated repository, at root level rather than nested in a subfolder. The
+original repository was restored to its pristine state — nothing was ever pushed to it, and the temporary
+branch was deleted.
 
 ---
 
