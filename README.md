@@ -21,13 +21,24 @@ Telegram / Web UI / Scheduler / Webhooks / API
 
 ## Quick start
 
-Requirements: Docker with Compose v2, ~8 GB free RAM, ~10 GB disk (the OmniRoute and Letta images are large).
+Requirements: Docker with Compose v2, ~8 GB RAM for Docker, ~10 GB disk (the OmniRoute and Letta images
+are large). On Windows use a WSL2 or Git Bash shell.
 
 ```bash
 git clone https://github.com/ajeetbr21/atlas.git && cd atlas
-cp .env.example .env            # then set ATLAS_API_TOKEN, APPLICATION_SECRET, POSTGRES_PASSWORD
-docker compose up -d            # first run builds the backend and frontend images
-docker compose ps
+scripts/bootstrap.sh --demo
+```
+
+That one command checks prerequisites, writes `.env` with freshly generated secrets (re-running never
+overwrites them), builds the images, starts all nine services, applies the migrations, waits for
+readiness, prints your API token and the status of every integration, and runs the end-to-end demo.
+
+Prefer to drive it with an AI assistant in your editor? [SETUP_PROMPT.md](SETUP_PROMPT.md) is a
+copy-paste prompt that does the whole install and verifies it. Or do it by hand:
+
+```bash
+cp .env.example .env    # set ATLAS_API_TOKEN, APPLICATION_SECRET, POSTGRES_PASSWORD
+docker compose up -d
 ```
 
 | URL (localhost only) | What |
@@ -120,7 +131,9 @@ backend/tests/            pytest suite (unit, integration, end-to-end, recovery)
 backend/scripts/          e2e_demo.py (runs inside the api container)
 frontend/                 React + TypeScript dashboard (Vite, served by nginx)
 docker/                   backend Dockerfile, postgres init
-scripts/                  demo.sh, verify_llm.py, ui_demo.py (Playwright), with-test-db.sh, dev-db.sh
+scripts/                  bootstrap.sh (one-command install), demo.sh, verify_llm.py, ui_demo.py,
+                          with-test-db.sh, dev-db.sh
 docs/
 AI.md                     build log: decisions, bugs fixed, verification evidence
+SETUP_PROMPT.md           copy-paste prompt to have an AI assistant install it for you
 ```
