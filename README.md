@@ -88,13 +88,22 @@ it does not show that a real model answers.
 - A real Letta 0.16.8 server stored session blocks. The local MCP server's 9 tools were discovered with
   token authentication.
 
+**Real LLM path — verified** with a local Ollama server (`qwen2.5:1.5b`, CPU, no API key): the LLM planner
+produced the plan, the agent made a real OpenAI tool call, the tool returned real data and the model stated
+it — `offline: false`, `provider=omniroute`, 2 model calls, one `local:get_current_time` call. Reproduce it
+with `scripts/verify_llm.py`.
+
 **Not verified:**
-- A real LLM answer. Requests reached the OmniRoute container, but its built-in free providers refused them
-  (HTTP 403/400/502) and there were no provider credentials, so every task ran in offline mode.
+- A **hosted** model provider through OmniRoute. The container ran and Atlas reached it, but its bundled
+  free providers refused every request (HTTP 403/400/502) and no provider credentials were available. The
+  gateway path itself is the same OpenAI-compatible client that the Ollama run proved.
 - Composio and Telegram, because there were no credentials.
+
+How it was built, every design decision, and all 22 bugs found and fixed: **[AI.md](AI.md)**.
 
 ## Documentation
 
+- **[AI.md](AI.md): build log — design reasoning, every bug found and fixed, full verification evidence**
 - [Architecture](docs/architecture.md): pipeline, services, data model, transactions, recovery
 - [Setup](docs/setup.md): install, configuration, development, tests
 - [Agents](docs/agents.md) · [Tools & MCP](docs/tools.md) · [Memory](docs/memory.md) · [Learning](docs/learning.md)
@@ -111,6 +120,7 @@ backend/tests/            pytest suite (unit, integration, end-to-end, recovery)
 backend/scripts/          e2e_demo.py (runs inside the api container)
 frontend/                 React + TypeScript dashboard (Vite, served by nginx)
 docker/                   backend Dockerfile, postgres init
-scripts/                  demo.sh, ui_demo.py (Playwright), with-test-db.sh, dev-db.sh
+scripts/                  demo.sh, verify_llm.py, ui_demo.py (Playwright), with-test-db.sh, dev-db.sh
 docs/
+AI.md                     build log: decisions, bugs fixed, verification evidence
 ```

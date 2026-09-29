@@ -16,6 +16,9 @@ agent_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("agent
 
 _SECRET_KEY_RE = re.compile(r"(token|secret|password|passwd|api[_-]?key|authorization|credential|private[_-]?key)",
                             re.IGNORECASE)
+# keys that merely contain a secret-looking word but are plain numbers/metadata worth keeping in the journal
+_SAFE_KEYS = frozenset({"prompt_tokens", "completion_tokens", "total_tokens", "max_tokens", "tokens",
+                        "token_count", "tokens_used", "max_output_tokens", "max_input_tokens"})
 _SECRET_VALUE_RES = [
     re.compile(r"(?i)bearer\s+[a-z0-9._\-]{8,}"),
     re.compile(r"\b\d{8,10}:[A-Za-z0-9_-]{30,}\b"),        # telegram bot token
@@ -38,7 +41,7 @@ def redact(value: Any, _depth: int = 0) -> Any:
     if isinstance(value, dict):
         out = {}
         for k, v in value.items():
-            if isinstance(k, str) and _SECRET_KEY_RE.search(k):
+            if isinstance(k, str) and _SECRET_KEY_RE.search(k) and k.lower() not in _SAFE_KEYS:
                 out[k] = REDACTED
             else:
                 out[k] = redact(v, _depth + 1)

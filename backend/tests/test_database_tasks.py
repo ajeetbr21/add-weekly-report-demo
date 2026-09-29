@@ -24,6 +24,11 @@ def test_redaction():
     out = redact(data)
     assert out["api_key"] == REDACTED and out["nested"]["password"] == REDACTED
     assert REDACTED in out["nested"]["ok"] and out["list"][0] == REDACTED
+    # token *counts* are metadata, not secrets: they must stay readable in the journal
+    kept = redact({"usage": {"prompt_tokens": 1902, "completion_tokens": 64}, "max_tokens": 512,
+                   "bot_token": "8000000:AAA"})
+    assert kept["usage"] == {"prompt_tokens": 1902, "completion_tokens": 64}
+    assert kept["max_tokens"] == 512 and kept["bot_token"] == REDACTED
 
 
 async def test_health_and_ready(client):
