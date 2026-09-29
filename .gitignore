@@ -1,0 +1,30 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# node
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# editors / os
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# local data
+workspace/
+*.log

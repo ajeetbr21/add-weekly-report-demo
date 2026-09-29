@@ -1,0 +1,134 @@
+# Atlas - local-first multi-agent AI platform
+#   docker compose up -d                  start everything
+#   docker compose ps                     status
+#   docker compose logs -f api worker     follow logs
+#   docker compose restart worker         restart a service
+#   docker compose down                   stop (data stays in volumes; add -v to delete it)
+# Published ports bind to 127.0.0.1 only: nothing is exposed to your network.
+#
+# Start-up ordering does not rely on container healthchecks (they are informational): the migrate job
+# waits for PostgreSQL itself, and every service retries its dependencies. This keeps `up` reliable on
+# Docker and on Podman (where healthchecks need systemd).
+
+name: atlas
+
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: docker/backend.Dockerfile
+  image: atlas-backend:local
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-atlas}:${POSTGRES_PASSWORD:-atlas}@postgres:5432/${POSTGRES_DB:-atlas}
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-atlas}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-atlas}
+      POSTGRES_DB: ${POSTGRES_DB:-atlas}
+    command: ["postgres", "-c", "max_connections=100", "-c", "shared_buffers=128MB"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-atlas} -d ${POSTGRES_DB:-atlas}"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    # uncomment to reach the DB from host tools (psql, backend tests against the stack)
+    # ports: ["127.0.0.1:5432:5432"]
+
+  migrate:
+    <<: *backend
+    command: ["python", "-m", "app.database.migrate"]   # waits for postgres, then `alembic upgrade head`
+    restart: "no"
+    depends_on: [postgres]
+
+  mcp-local:
+    <<: *backend
+    command: ["python", "-m", "app.integrations.mcp.local_server"]
+    volumes:
+      - workspace:/workspace
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 8765), 2)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  api:
+    <<: *backend
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      mcp-local: { condition: service_started }
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8000/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.worker"]
+    stop_grace_period: 30s
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      mcp-local: { condition: service_started }
+
+  telegram:
+    <<: *backend
+    command: ["python", "-m", "app.integrations.telegram.bot"]
+    environment:
+      ATLAS_API_URL: http://api:8000
+      DATABASE_URL: ""   # the bot has no database access; it only talks to the API
+    depends_on: [api]
+
+  frontend:
+    build:
+      context: ./frontend
+    image: atlas-frontend:local
+    environment:
+      ATLAS_API_TOKEN: ${ATLAS_API_TOKEN:-}
+    ports: ["127.0.0.1:3000:80"]
+    depends_on: [api]
+    restart: unless-stopped
+
+  # OpenAI-compatible model gateway. Open http://localhost:20128 to connect providers and create an API key,
+  # then set OMNIROUTE_ENABLED=true + OMNIROUTE_API_KEY in .env.
+  omniroute:
+    image: diegosouzapw/omniroute:latest
+    environment:
+      OMNIROUTE_MEMORY_MB: ${OMNIROUTE_MEMORY_MB:-1024}
+    volumes:
+      - omniroute-data:/app/data
+    ports: ["127.0.0.1:20128:20128"]
+    stop_grace_period: 40s
+    restart: unless-stopped
+
+  # Letta server: session state (memory blocks) for conversations. 0.16.8 is the last release of the
+  # self-hosted Letta *server* image (newer tags ship the Letta Code CLI instead).
+  letta:
+    image: letta/letta:0.16.8
+    environment:
+      LETTA_PG_URI: postgresql://${POSTGRES_USER:-atlas}:${POSTGRES_PASSWORD:-atlas}@postgres:5432/letta
+      # optional Letta-side agents route their models through OmniRoute as well
+      OPENAI_API_BASE: http://omniroute:20128/v1
+      OPENAI_API_KEY: ${OMNIROUTE_API_KEY:-not-configured}
+    depends_on: [postgres]
+    restart: unless-stopped
+    # ports: ["127.0.0.1:8283:8283"]
+
+volumes:
+  pgdata:
+  workspace:
+  omniroute-data:
