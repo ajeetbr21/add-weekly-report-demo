@@ -862,6 +862,20 @@ def set_row_widths(row, widths_in):
         cell.width = Inches(w)
 
 
+def set_table_cell_margins(table, top=0, bottom=0, left=60, right=60):
+    """Set default cell margins (twips) for the whole table so rows can be made
+    very tight vertically (top/bottom 0) while keeping a little side padding.
+    Used to pack all 20 account rows + Total onto one summary page."""
+    tblPr = table._tbl.tblPr
+    for old in tblPr.findall(qn("w:tblCellMar")):
+        tblPr.remove(old)
+    mar = "".join(f'<w:{side} w:w="{val}" w:type="dxa"/>'
+                  for side, val in (("top", top), ("left", left), ("bottom", bottom), ("right", right)))
+    tblPr.insert_element_before(
+        parse_xml(f'<w:tblCellMar {nsdecls("w")}>{mar}</w:tblCellMar>'),
+        "w:tblLook", "w:tblCaption", "w:tblDescription", "w:tblPrChange")
+
+
 def keep_row_on_one_page(row):
     trPr = row._tr.get_or_add_trPr()
     if not trPr.findall(qn("w:cantSplit")):
@@ -896,6 +910,71 @@ def add_internal_hyperlink(paragraph, anchor, text, font_size_pt=8, color_hex="4
     paragraph._p.append(hyperlink)
 
 
+# --------------------------------------------------------- disc bullet lists --
+# Self-contained disc (dot) bullet numbering so the account/summary pages match
+# the branded reference. We register one abstractNum with two levels (both solid
+# discs) and one concrete num that every bulleted paragraph references via numPr.
+# This renders filled dot bullets in Word / LibreOffice / Google Docs. Indent is
+# set per paragraph so the reference "ek line aage ek line piche" hierarchy holds.
+_DISC_NUM_ID = [None]      # cached concrete numId for the running document
+
+
+def _twips(inches):
+    return int(round(inches * 1440))
+
+
+def _ensure_disc_numbering(doc):
+    """Register a disc-bullet abstractNum + num in the document's numbering part
+    (once per document) and return the concrete numId."""
+    if _DISC_NUM_ID[0] is not None:
+        return _DISC_NUM_ID[0]
+    numbering = doc.part.numbering_part.element
+    abstract_id = 9100            # high ids to avoid clashing with built-in styles
+    num_id = 9101
+    levels = "".join(
+        f'<w:lvl w:ilvl="{i}">'
+        f'<w:start w:val="1"/><w:numFmt w:val="bullet"/>'
+        f'<w:lvlText w:val="&#9679;"/>'          # U+25CF black circle (disc)
+        f'<w:lvlJc w:val="left"/>'
+        f'<w:pPr><w:ind w:left="{720 * (i + 1)}" w:hanging="360"/></w:pPr>'
+        f'<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:hint="default"/></w:rPr>'
+        f'</w:lvl>'
+        for i in range(3)
+    )
+    numbering.insert(0, parse_xml(
+        f'<w:abstractNum {nsdecls("w")} w:abstractNumId="{abstract_id}">'
+        f'<w:multiLevelType w:val="hybridMultilevel"/>{levels}</w:abstractNum>'))
+    numbering.append(parse_xml(
+        f'<w:num {nsdecls("w")} w:numId="{num_id}">'
+        f'<w:abstractNumId w:val="{abstract_id}"/></w:num>'))
+    _DISC_NUM_ID[0] = num_id
+    return num_id
+
+
+def add_bullet(doc, segments, ilvl=0, left_in=0.5, hanging_in=0.25, size=12,
+               before=0, after=4, single=True, keep_with_next=False):
+    """Add a disc-bullet paragraph. `segments` is a list of (text, bold) tuples
+    so a line like 'Total cost for the week: $340.00' can bold just the amount.
+    `left_in`/`hanging_in` control the reference indent hierarchy."""
+    num_id = _ensure_disc_numbering(doc)
+    p = doc.add_paragraph()
+    set_spacing(p, before, after, single, keep_with_next)
+    pf = p.paragraph_format
+    pf.left_indent = Inches(left_in)
+    pf.first_line_indent = Inches(-hanging_in)
+    # numPr must be inside pPr for the bullet glyph to render
+    pPr = p._p.get_or_add_pPr()
+    pPr.append(parse_xml(
+        f'<w:numPr {nsdecls("w")}><w:ilvl w:val="{ilvl}"/>'
+        f'<w:numId w:val="{num_id}"/></w:numPr>'))
+    for text, bold in segments:
+        r = p.add_run(text)
+        r.font.name = "Arial"
+        r.font.size = Pt(size)
+        r.font.bold = bold
+    return p
+
+
 def set_spacing(paragraph, before=None, after=None, single=False, keep_with_next=False):
     pf = paragraph.paragraph_format
     if before is not None:
@@ -924,10 +1003,10 @@ def add_text(doc, text, size=12, bold=False, color=None, italic=False, align=Non
     return p
 
 
-def style_cell(cell, size, bold=False, align=WD_ALIGN_PARAGRAPH.LEFT, color=None):
+def style_cell(cell, size, bold=False, align=WD_ALIGN_PARAGRAPH.LEFT, color=None, before=1, after=1):
     for p in cell.paragraphs:
         p.alignment = align
-        set_spacing(p, before=1, after=1, single=True)    # compact rows (no empty gap under the text)
+        set_spacing(p, before=before, after=after, single=True)    # compact rows (no empty gap under the text)
         for run in p.runs:
             run.font.name = "Arial"
             run.font.size = Pt(size)
@@ -997,15 +1076,17 @@ def account_text_height_in(item, acc_alarms, cur_start, cur_end, is_last):
     h = _line_in(10) + sp["banner"] * pt
     h += _line_in(14) * _wrapped_lines(f"{item['name']} – {item['account_id']}", w, 14, True) + sp["name"] * pt
     h += _line_in(9.5) + sp["dashes"] * pt
-    h += _line_in(12) + sp["heading"] * pt
-    h += _line_in(12) + sp["line"] * pt
-    h += _line_in(12) + sp["avg"] * pt
+    # Body is now disc bullets. Bullets add a hanging indent so the usable text
+    # width shrinks (outer ~0.37in, inner ~0.94in); account for the narrower box.
+    h += _line_in(12) + sp["heading"] * pt                         # 'Billing and Cost Overview' outer bullet
+    h += _line_in(12) + sp["line"] * pt                            # 'Total cost ...' inner bullet
+    h += _line_in(12) + sp["avg"] * pt                             # 'Average Daily Cost ...' inner bullet
     if not item.get("cur_detail"):
         h += _line_in(10) * 2 + sp["line"] * pt
     if item["tax_cost"] > 0:
         h += _line_in(12) + sp["line"] * pt
-    h += _line_in(12) * _wrapped_lines(item["remark"], w, 12) + sp["line"] * pt
-    h += _line_in(11) + sp["note"] * pt
+    h += _line_in(12) * _wrapped_lines(item["remark"], w - 0.37, 12) + sp["line"] * pt   # remark bullet
+    h += _line_in(12) + sp["note"] * pt                            # 'No Activity ...' outer bullet (now 12pt)
     h += _line_in(14) + sp["alarm_heading"] * pt
     h += _alarm_table_height_in(acc_alarms, cur_start, cur_end) if acc_alarms else _line_in(11) + sp["line"] * pt
     if is_last:                                          # blank line + "-- End Of Document --"
@@ -1207,8 +1288,7 @@ def generate_docx_report(cost_data, alarm_rows, cur_start, cur_end, prev_start, 
 
     # 1. Title
     add_text(doc, f"Aptech Limited Weekly Status Report\n({cur_start:%d %B} to {cur_end:%d %B %Y})",
-             size=16, bold=True, color=NAVY, align=WD_ALIGN_PARAGRAPH.CENTER)
-    doc.add_paragraph()
+             size=15, bold=True, color=NAVY, align=WD_ALIGN_PARAGRAPH.CENTER, before=0, after=2, single=True)
 
     # 2. Cost summary bullets
     tot_cur = sum(x["cur_cost"] for x in cost_data)
@@ -1217,20 +1297,16 @@ def generate_docx_report(cost_data, alarm_rows, cur_start, cur_end, prev_start, 
     diff_tot = tot_cur - tot_prev
     direction = "decreased" if diff_tot <= 0 else "increased"
 
-    p_h1 = add_text(doc, "Cost Summary Difference of All AWS Accounts", size=14, bold=True, color=NAVY)
+    p_h1 = add_text(doc, "Cost Summary Difference of All AWS Accounts", size=14, bold=True, color=NAVY,
+                    before=0, after=2, single=True)
     add_bookmark(p_h1, "Summary")
-    for txt in (f"The billing for the current week ({cur_start:%d %B} to {cur_end:%d %B}) has {direction} compared to the previous week.",
-                f"The cost difference is ${abs(diff_tot):,.2f}."):
-        p = doc.add_paragraph(style="List Bullet")
-        r = p.add_run(txt)
-        r.font.name, r.font.size, r.font.bold = "Arial", Pt(12), True
-    doc.add_paragraph()
 
     # 3. Master cost table
     table1 = doc.add_table(rows=1, cols=7)
     table1.alignment = WD_TABLE_ALIGNMENT.CENTER
     set_table_borders(table1)
     set_table_layout(table1, MASTER_COL_WIDTHS_IN)
+    set_table_cell_margins(table1, top=0, bottom=0, left=50, right=50)   # tight rows so all 20 + Total fit one page
     hdr_titles = ["No", "Account Name", "Account ID",
                   f"Last Week Cost ({prev_start:%d %b} to {prev_end:%d %b})", "Tax Cost",
                   f"Current Week Cost ({cur_start:%d %b} to {cur_end:%d %b})", "Services"]
@@ -1239,7 +1315,7 @@ def generate_docx_report(cost_data, alarm_rows, cur_start, cur_end, prev_start, 
         c = table1.rows[0].cells[i]
         c.text = title
         set_cell_background(c, "BEBEBE")
-        style_cell(c, 9, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
+        style_cell(c, 8, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, before=0, after=0)
 
     for item in sorted(cost_data, key=lambda x: x["no"]):
         row = table1.add_row()
@@ -1254,7 +1330,8 @@ def generate_docx_report(cost_data, alarm_rows, cur_start, cur_end, prev_start, 
         cells[5].text = money(item["cur_cost"])
         cells[6].text = item["remark"]
         for idx, c in enumerate(cells):
-            style_cell(c, 8, align=WD_ALIGN_PARAGRAPH.CENTER if idx in (0, 2, 3, 4, 5) else WD_ALIGN_PARAGRAPH.LEFT)
+            style_cell(c, 7, align=WD_ALIGN_PARAGRAPH.CENTER if idx in (0, 2, 3, 4, 5) else WD_ALIGN_PARAGRAPH.LEFT,
+                       before=0, after=0)
 
     tot_row = table1.add_row()
     set_row_widths(tot_row, MASTER_COL_WIDTHS_IN)
@@ -1267,7 +1344,13 @@ def generate_docx_report(cost_data, alarm_rows, cur_start, cur_end, prev_start, 
     tot[5].text = f"{'⬇' if diff_tot <= 0 else '⬆'}{money(tot_cur)}"
     for c in table1.rows[-1].cells:
         set_cell_background(c, "D9E1F2")
-        style_cell(c, 8.5, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
+        style_cell(c, 8.5, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, before=0, after=0)
+    doc.add_paragraph()
+
+    # 3b. Cost summary bullets, now BELOW the master table (disc bullets, bold).
+    for txt in (f"The billing for the current week ({cur_start:%d %B} to {cur_end:%d %B}) has {direction} compared to the previous week.",
+                f"The cost difference is ${abs(diff_tot):,.2f}."):
+        add_bullet(doc, [(txt, True)], ilvl=0, left_in=0.64, hanging_in=0.25, size=12, before=0, after=6)
     doc.add_paragraph()
 
     # 4. Security links table
@@ -1315,14 +1398,23 @@ def generate_docx_report(cost_data, alarm_rows, cur_start, cur_end, prev_start, 
                 r = p_banner.add_run(txt)
                 r.font.name, r.font.size, r.font.bold = "Arial", Pt(9.5), True
 
-        p_name = add_text(doc, f"{item['name']} – {acc_id}", size=14, bold=True, color=NAVY,
-                          before=0, after=sp["name"], single=True)
+        # Account name heading: centered, bold, underlined, black (reference Heading1).
+        p_name = add_text(doc, f"{item['name']} – {acc_id}", size=14, bold=True,
+                          align=WD_ALIGN_PARAGRAPH.CENTER, before=0, after=sp["name"], single=True)
+        for r in p_name.runs:
+            r.font.underline = True
         add_bookmark(p_name, f"_acc_{acc_id}")
         add_text(doc, "-" * 128, size=9.5, bold=True, before=0, after=sp["dashes"], single=True)
 
-        add_text(doc, "Billing and Cost Overview", size=12, bold=True, before=0, after=sp["heading"], single=True)
-        add_text(doc, f"Total cost for the week: {money(item['cur_cost'])}", before=0, after=sp["line"], single=True)
-        add_text(doc, f"Average Daily Cost: {money(item['avg_daily'])}", before=0, after=sp["avg"], single=True)
+        # Body as disc bullets with the reference indent hierarchy:
+        #   'Billing and Cost Overview' = outer (top-level) bullet, bold
+        #   'Total cost ...' / 'Average Daily Cost ...' = inner (deeper) bullets, amount bold
+        add_bullet(doc, [("Billing and Cost Overview", True)], ilvl=0, left_in=0.37,
+                   hanging_in=0.25, size=12, before=0, after=sp["heading"])
+        add_bullet(doc, [("Total cost for the week: ", False), (money(item['cur_cost']), True)],
+                   ilvl=1, left_in=0.94, hanging_in=0.25, size=12, before=0, after=sp["line"])
+        add_bullet(doc, [("Average Daily Cost: ", False), (money(item['avg_daily']), True)],
+                   ilvl=1, left_in=0.94, hanging_in=0.25, size=12, before=0, after=sp["avg"])
 
         detail = item.get("cur_detail")
         if detail:
@@ -1348,9 +1440,10 @@ def generate_docx_report(cost_data, alarm_rows, cur_start, cur_end, prev_start, 
 
         if item["tax_cost"] > 0:
             add_text(doc, f"Total Tax Cost: {money(item['tax_cost'])}", before=0, after=sp["line"], single=True)
-        add_text(doc, item["remark"], before=0, after=sp["line"], single=True)
-        add_text(doc, "No Activity performed by Operisoft in this account.", size=11, bold=True,
-                 before=0, after=sp["note"], single=True)
+        add_bullet(doc, [(item["remark"], False)], ilvl=0, left_in=0.37, hanging_in=0.25,
+                   size=12, before=0, after=sp["line"])
+        add_bullet(doc, [("No Activity performed by Operisoft in this account.", True)], ilvl=0,
+                   left_in=0.37, hanging_in=0.25, size=12, before=0, after=sp["note"])
 
         add_text(doc, "Resource Utilization & Alarms", size=14, bold=True, before=0, after=sp["alarm_heading"],
                  single=True, keep_with_next=True)
