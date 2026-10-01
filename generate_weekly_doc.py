@@ -96,10 +96,10 @@ from botocore.config import Config
 from botocore.exceptions import NoCredentialsError
 
 import docx
-from docx.shared import Inches, Pt, RGBColor
+from docx.shared import Inches, Pt, Emu, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.oxml import parse_xml
+from docx.oxml import parse_xml, OxmlElement
 from docx.oxml.ns import nsdecls, qn
 
 import matplotlib
@@ -224,6 +224,55 @@ ALARM_HEADERS = ("Server Name", "Region", "Memory/Disk/CPU", "Alert date and no.
 # ------------------------------------------------------------------ helpers --
 def log(msg):
     print(msg, flush=True)
+
+
+# ------------------------------------------------------- branding assets --
+# Resolve the branding asset directory relative to THIS script file (not the
+# current working directory) so the report builds the same way from CloudShell,
+# EC2 or any CWD. We try a few sensible locations and fall back gracefully.
+def _branding_dir():
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(here, "assets", "branding"),
+        os.path.join(here, "..", "assets", "branding"),
+        os.path.join(os.getcwd(), "assets", "branding"),
+    ]
+    for d in candidates:
+        if os.path.isdir(d):
+            return os.path.abspath(d)
+    # default to the script-relative path even if it does not exist yet
+    return os.path.abspath(candidates[0])
+
+
+BRANDING_DIR = _branding_dir()
+
+
+def asset_path(name):
+    """Return the absolute path to a branding asset, or None if it is missing.
+
+    Degrades gracefully: a missing asset logs a warning and returns None so the
+    caller can skip the image instead of crashing the whole report.
+    """
+    path = os.path.join(BRANDING_DIR, name)
+    if os.path.isfile(path):
+        return path
+    log(f"[WARN] Branding asset not found, skipping: {path}")
+    return None
+
+
+def _add_centered_image(doc, name, width_in):
+    """Add a centered picture to a new paragraph. Returns the paragraph (or None)."""
+    path = asset_path(name)
+    if not path:
+        return None
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    set_spacing(p, before=0, after=6, single=True)
+    try:
+        p.add_run().add_picture(path, width=Inches(width_in))
+    except Exception as e:
+        log(f"[WARN] Could not embed image {name}: {e}")
+    return p
 
 
 def get_tz(name):
@@ -963,6 +1012,130 @@ def plan_cost_images(detail, text_height_in):
     return IMG_MAX_WIDTH_IN, min(MAX_TABLE_ROWS, len(detail["service_totals"]))   # cannot fit anyway
 
 
+# ------------------------------------------------------ branded header --
+# The CONFIDENTIAL watermark is a VML text-path shape (type #_x0000_t136)
+# living in the DEFAULT header, so Word/LibreOffice/Google Docs render it on
+# EVERY page. python-docx has no native watermark API, so we inject the same
+# markup used by the branded reference (word/header1.xml): rotation 315,
+# fillcolor #c0c0c0, fill opacity 32768f, behind the page content.
+_WATERMARK_XML = (
+    '<w:r %s>'
+    '<w:rPr><w:noProof/></w:rPr>'
+    '<w:pict xmlns:v="urn:schemas-microsoft-com:vml" '
+    'xmlns:o="urn:schemas-microsoft-com:office:office">'
+    '<v:shape id="PowerPlusWaterMarkObject1" '
+    'style="position:absolute;margin-left:0;margin-top:0;width:527.85pt;'
+    'height:131.95pt;rotation:315;z-index:-503316481;'
+    'mso-position-horizontal-relative:margin;mso-position-horizontal:center;'
+    'mso-position-vertical-relative:margin;mso-position-vertical:center;" '
+    'fillcolor="#c0c0c0" stroked="f" type="#_x0000_t136">'
+    '<v:fill angle="0" opacity="32768f"/>'
+    '<v:textpath fitshape="t" string="CONFIDENTIAL" '
+    'style="font-family:&quot;Arial&quot;;font-size:1pt;"/>'
+    '</v:shape></w:pict></w:r>'
+) % nsdecls("w")
+
+
+def _add_watermark(header):
+    """Inject the CONFIDENTIAL VML watermark into the given header part."""
+    para = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
+    try:
+        para._p.append(parse_xml(_WATERMARK_XML))
+    except Exception as e:
+        log(f"[WARN] Could not add watermark: {e}")
+
+
+def build_branded_header(doc):
+    """Build the default per-page header: AWS partner cluster (left) and the
+    Operisoft logo (right), plus the diagonal CONFIDENTIAL watermark. Because it
+    is the default (not first-page-only) header, it appears on every page."""
+    section = doc.sections[0]
+    header = section.header
+    header.is_linked_to_previous = False
+
+    # Clear any default empty paragraph then lay the two logos out in a
+    # borderless two-column table so one sits left and the other right.
+    left = asset_path("aws_partner_cluster.png")
+    right = asset_path("operisoft_logo_header.png")
+
+    htable = header.add_table(rows=1, cols=2, width=Inches(CONTENT_WIDTH_IN))
+    htable.alignment = WD_TABLE_ALIGNMENT.CENTER
+    try:
+        htable.autofit = False
+    except Exception:
+        pass
+    hcells = htable.rows[0].cells
+    set_row_widths(htable.rows[0], [CONTENT_WIDTH_IN / 2.0, CONTENT_WIDTH_IN / 2.0])
+
+    if left:
+        lp = hcells[0].paragraphs[0]
+        lp.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        try:
+            lp.add_run().add_picture(left, width=Inches(0.85))
+        except Exception as e:
+            log(f"[WARN] Could not embed header left image: {e}")
+    if right:
+        rp = hcells[1].paragraphs[0]
+        rp.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        try:
+            rp.add_run().add_picture(right, width=Inches(1.5))
+        except Exception as e:
+            log(f"[WARN] Could not embed header right image: {e}")
+
+    _add_watermark(header)
+
+
+def build_cover_page(doc, cur_end):
+    """Build the branded cover (page 1): large Operisoft logo, big bold title,
+    Aptech Limited + Aptech logo, AWS Advanced Tier badge with bullets, and the
+    'Submitted By' block with the date. Mirrors the branded reference layout."""
+    # Push the cover block down a little so it fills page 1 nicely.
+    for _ in range(2):
+        doc.add_paragraph()
+
+    # Large Operisoft logo at the top.
+    _add_centered_image(doc, "operisoft_logo_large.png", 3.6)
+
+    # Big bold title lines (28pt, matching reference sz val=56 half-points).
+    add_text(doc, "Weekly Status Report", size=28, bold=True, color=NAVY,
+             align=WD_ALIGN_PARAGRAPH.CENTER, before=12, after=6)
+    add_text(doc, "Aptech Limited", size=28, bold=True, color=NAVY,
+             align=WD_ALIGN_PARAGRAPH.CENTER, before=0, after=6)
+
+    # Aptech 'Unleash your potential' logo under the Aptech Limited line.
+    _add_centered_image(doc, "aptech_logo.png", 2.3)
+
+    # AWS Advanced Tier Partner badge plus its qualifying bullets.
+    _add_centered_image(doc, "aws_partner_badge.png", 2.6)
+    for bullet in ("Public Sector", "Immersion Day", "Well-Architected Partner Program"):
+        p = doc.add_paragraph(style="List Bullet")
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        set_spacing(p, before=0, after=1, single=True)
+        r = p.add_run(bullet)
+        r.font.name, r.font.size = "Arial", Pt(11)
+
+    doc.add_paragraph()
+
+    # 'Submitted By' block (11pt, matching reference sz val=22 half-points).
+    add_text(doc, "Submitted By", size=11, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER,
+             before=6, after=2)
+    add_text(doc, "Operisoft Technologies Pvt Ltd", size=11, bold=False,
+             align=WD_ALIGN_PARAGRAPH.CENTER, before=0, after=2)
+    # Default the cover date to the report end date (dd/mm/yyyy). NOTE: the
+    # branded reference shows a fixed 23/09/2026 while its data window is
+    # 14-20 Sep, i.e. the reference date is NOT derived from the window.
+    # Deriving from cur_end is the sensible self-contained default. To hardcode
+    # a fixed date instead, replace the line below with cover_date = "23/09/2026".
+    cover_date = f"{cur_end:%d/%m/%Y}"
+    add_text(doc, cover_date, size=11, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER,
+             before=0, after=0)
+
+    # Force the existing report body (master cost table) to start on page 2.
+    p_break = doc.add_paragraph()
+    p_break.paragraph_format.page_break_before = True
+    set_spacing(p_break, before=0, after=0, single=True)
+
+
 # ------------------------------------------------------------ doc builder --
 def generate_docx_report(cost_data, alarm_rows, cur_start, cur_end, prev_start, prev_end, out_path, save_images_dir=None):
     doc = docx.Document()
@@ -971,6 +1144,13 @@ def generate_docx_report(cost_data, alarm_rows, cur_start, cur_end, prev_start, 
         section.top_margin = section.bottom_margin = Inches(MARGIN_TOP_BOTTOM_IN)
         section.left_margin = section.right_margin = Inches(MARGIN_LEFT_RIGHT_IN)
         section.header_distance = section.footer_distance = Inches(0.3)
+
+    # 0a. Branded per-page header (AWS partner cluster left, Operisoft logo
+    #     right) plus the diagonal CONFIDENTIAL watermark on every page.
+    build_branded_header(doc)
+
+    # 0b. Branded cover page (page 1). The master cost table begins on page 2.
+    build_cover_page(doc, cur_end)
 
     # 1. Title
     add_text(doc, f"Aptech Limited Weekly Status Report\n({cur_start:%d %B} to {cur_end:%d %B %Y})",
