@@ -29,6 +29,26 @@
     python3 generate_weekly_doc.py --account-id 654654548701 --start 2026-09-14 --end 2026-09-20 --save-images
 
  -------------------------------------------------------------------------------
+ BRANDING (cover page, per-page header, watermark):
+   The generated .docx is fully branded:
+     * A branded COVER PAGE (page 1): large Operisoft logo, the "Weekly Status
+       Report" / "Aptech Limited" title, the Aptech banner, the "Submitted By"
+       block, and the AWS Advanced Tier Partner badge.
+     * A PER-PAGE HEADER on every page: the AWS partner badge/cluster image on
+       the left and the Operisoft logo on the right.
+     * A diagonal "CONFIDENTIAL" WATERMARK behind the content on every page.
+   The cover DATE is the GENERATION DATE (today, the day you run the script),
+   shown as DD/MM/YYYY.
+   Branding images are read from the 'assets/branding/' directory resolved
+   relative to this script (works regardless of the current directory). The
+   expected PNG files are:
+       aptech_logo.png            operisoft_logo_large.png
+       operisoft_logo_header.png  aws_partner_badge.png
+       aws_partner_cluster.png
+   If any asset is missing the script logs a warning and simply skips that
+   image, so it never crashes when branding files are absent.
+
+ -------------------------------------------------------------------------------
  HOW THE TWO COST IMAGES ARE PRODUCED:
    AWS has no API that returns a screenshot of the Cost Explorer console.
    The script calls Cost Explorer GetCostAndUsage (DAILY, grouped by SERVICE)
@@ -43,6 +63,11 @@
    ec2:DescribeRegions, ec2:DescribeInstances  (AWS 'ReadOnlyAccess' covers these)
 
  WORD (.DOCX) REPORT STRUCTURE:
+   - Page 1: branded COVER PAGE (large Operisoft logo, "Weekly Status Report" /
+     "Aptech Limited" title, Aptech banner, "Submitted By" block with today's
+     generation date, AWS Advanced Tier Partner badge).
+   - Every page carries the branded header (AWS partner badges + Operisoft logo)
+     and a diagonal CONFIDENTIAL watermark behind the content.
    - Title: Aptech Limited Weekly Status Report (date range)
    - Cost Summary bullets + Master Billing Table (account names link to sections)
    - Security Best Practices Links table
@@ -1085,13 +1110,13 @@ def build_branded_header(doc):
     _add_watermark(header)
 
 
-# Cover date shown on page 1. The branded reference (branded-source.docx)
-# shows a FIXED 23/09/2026 that is NOT derived from the report data window
-# (its window is 14-20 Sep). To deliver a sem-to-sem visual match with that
-# reference we hardcode the same literal date here. For live runs that should
-# instead show the report end date, replace the use of COVER_DATE below with a
-# cur_end-derived value, e.g. cover_date = f"{cur_end:%d/%m/%Y}".
-COVER_DATE = "23/09/2026"
+# Cover date shown on page 1. This is the date the report is GENERATED (today),
+# formatted DD/MM/YYYY to match the reference demo's "23/09/2026" style. It is
+# computed at generation time via date.today() rather than being hardcoded or
+# derived from the report data window.
+def _cover_date():
+    """Return today's date (report generation date) as DD/MM/YYYY."""
+    return f"{date.today():%d/%m/%Y}"
 
 # Cover title uses a BLACK serif face to match the reference (Cambria sz 28pt).
 # Cambria may be unavailable on some systems; Times New Roman is a safe serif
@@ -1150,7 +1175,7 @@ def build_cover_page(doc, cur_end):
              before=6, after=2)
     add_text(doc, "Operisoft Technologies Pvt Ltd", size=11, bold=True,
              align=WD_ALIGN_PARAGRAPH.CENTER, before=0, after=2)
-    cover_date = COVER_DATE
+    cover_date = _cover_date()
     add_text(doc, cover_date, size=11, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER,
              before=6, after=6)
 
