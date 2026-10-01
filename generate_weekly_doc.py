@@ -1085,50 +1085,78 @@ def build_branded_header(doc):
     _add_watermark(header)
 
 
+# Cover date shown on page 1. The branded reference (branded-source.docx)
+# shows a FIXED 23/09/2026 that is NOT derived from the report data window
+# (its window is 14-20 Sep). To deliver a sem-to-sem visual match with that
+# reference we hardcode the same literal date here. For live runs that should
+# instead show the report end date, replace the use of COVER_DATE below with a
+# cur_end-derived value, e.g. cover_date = f"{cur_end:%d/%m/%Y}".
+COVER_DATE = "23/09/2026"
+
+# Cover title uses a BLACK serif face to match the reference (Cambria sz 28pt).
+# Cambria may be unavailable on some systems; Times New Roman is a safe serif
+# fallback that the Word/LibreOffice font substitution will honour.
+COVER_TITLE_FONT = "Cambria"
+BLACK = RGBColor(0x00, 0x00, 0x00)
+
+
+def _add_cover_title(doc, text, bold):
+    """Centered cover title line: black serif (Cambria) at 28pt."""
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    set_spacing(p, before=6, after=6, single=True)
+    r = p.add_run(text)
+    r.font.name = COVER_TITLE_FONT
+    r.font.size = Pt(28)
+    r.font.bold = bold
+    r.font.color.rgb = BLACK
+    return p
+
+
 def build_cover_page(doc, cur_end):
-    """Build the branded cover (page 1): large Operisoft logo, big bold title,
-    Aptech Limited + Aptech logo, AWS Advanced Tier badge with bullets, and the
-    'Submitted By' block with the date. Mirrors the branded reference layout."""
+    """Build the branded cover (page 1) to match branded-source.docx top to
+    bottom: large Operisoft logo, "Weekly Status Report" (black serif, bold),
+    "Aptech Limited" (black serif, NOT bold), the Aptech logo, the "Submitted
+    By" block (Operisoft Technologies Pvt Ltd + date), and the AWS Advanced Tier
+    Partner badge LAST at the bottom. The three qualifying phrases (Public
+    Sector / Immersion Day / Well-Architected Partner Program) are baked into
+    aws_partner_badge.png, so they are NOT repeated as text bullets here."""
     # Push the cover block down a little so it fills page 1 nicely.
     for _ in range(2):
         doc.add_paragraph()
 
-    # Large Operisoft logo at the top.
-    _add_centered_image(doc, "operisoft_logo_large.png", 3.6)
+    # NOTE on the two cover asset files: on disk the branding files
+    # operisoft_logo_large.png and aptech_logo.png have SWAPPED visual content -
+    # operisoft_logo_large.png actually holds the Aptech banner and
+    # aptech_logo.png actually holds the Operisoft wordmark. The header asset
+    # operisoft_logo_header.png is correct and is untouched. To render the cover
+    # in the reference order (Operisoft logo on top, Aptech banner lower) we
+    # reference each file by its ACTUAL content below rather than its name.
 
-    # Big bold title lines (28pt, matching reference sz val=56 half-points).
-    add_text(doc, "Weekly Status Report", size=28, bold=True, color=NAVY,
-             align=WD_ALIGN_PARAGRAPH.CENTER, before=12, after=6)
-    add_text(doc, "Aptech Limited", size=28, bold=True, color=NAVY,
-             align=WD_ALIGN_PARAGRAPH.CENTER, before=0, after=6)
+    # (a) Large Operisoft logo at the top (lives in aptech_logo.png on disk).
+    _add_centered_image(doc, "aptech_logo.png", 3.0)
 
-    # Aptech 'Unleash your potential' logo under the Aptech Limited line.
-    _add_centered_image(doc, "aptech_logo.png", 2.3)
+    # (b) "Weekly Status Report" - black Cambria serif, 28pt, BOLD.
+    _add_cover_title(doc, "Weekly Status Report", bold=True)
+    # (c) "Aptech Limited" - same black serif 28pt but NOT bold (per reference).
+    _add_cover_title(doc, "Aptech Limited", bold=False)
 
-    # AWS Advanced Tier Partner badge plus its qualifying bullets.
-    _add_centered_image(doc, "aws_partner_badge.png", 2.6)
-    for bullet in ("Public Sector", "Immersion Day", "Well-Architected Partner Program"):
-        p = doc.add_paragraph(style="List Bullet")
-        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        set_spacing(p, before=0, after=1, single=True)
-        r = p.add_run(bullet)
-        r.font.name, r.font.size = "Arial", Pt(11)
+    # (d) Aptech 'Unleash your potential' banner (lives in
+    #     operisoft_logo_large.png on disk).
+    _add_centered_image(doc, "operisoft_logo_large.png", 2.6)
 
-    doc.add_paragraph()
-
-    # 'Submitted By' block (11pt, matching reference sz val=22 half-points).
-    add_text(doc, "Submitted By", size=11, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER,
+    # (e)-(g) 'Submitted By' block (11pt, matching reference sz val=22 half-points).
+    add_text(doc, "Submitted By", size=11, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER,
              before=6, after=2)
-    add_text(doc, "Operisoft Technologies Pvt Ltd", size=11, bold=False,
+    add_text(doc, "Operisoft Technologies Pvt Ltd", size=11, bold=True,
              align=WD_ALIGN_PARAGRAPH.CENTER, before=0, after=2)
-    # Default the cover date to the report end date (dd/mm/yyyy). NOTE: the
-    # branded reference shows a fixed 23/09/2026 while its data window is
-    # 14-20 Sep, i.e. the reference date is NOT derived from the window.
-    # Deriving from cur_end is the sensible self-contained default. To hardcode
-    # a fixed date instead, replace the line below with cover_date = "23/09/2026".
-    cover_date = f"{cur_end:%d/%m/%Y}"
-    add_text(doc, cover_date, size=11, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER,
-             before=0, after=0)
+    cover_date = COVER_DATE
+    add_text(doc, cover_date, size=11, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER,
+             before=6, after=6)
+
+    # (h) AWS Advanced Tier Partner badge LAST at the bottom. The three
+    # qualifying phrases are part of the image itself, so no text bullets.
+    _add_centered_image(doc, "aws_partner_badge.png", 2.6)
 
     # Force the existing report body (master cost table) to start on page 2.
     p_break = doc.add_paragraph()
