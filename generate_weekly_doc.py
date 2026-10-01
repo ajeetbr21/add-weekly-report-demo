@@ -1116,7 +1116,7 @@ def generate_docx_report(cost_data, alarm_rows, cur_start, cur_end, prev_start, 
         if item["tax_cost"] > 0:
             add_text(doc, f"Total Tax Cost: {money(item['tax_cost'])}", before=0, after=sp["line"], single=True)
         add_text(doc, item["remark"], before=0, after=sp["line"], single=True)
-        add_text(doc, "No Activity performed by Operisoft in this account.", size=11,
+        add_text(doc, "No Activity performed by Operisoft in this account.", size=11, bold=True,
                  before=0, after=sp["note"], single=True)
 
         add_text(doc, "Resource Utilization & Alarms", size=14, bold=True, before=0, after=sp["alarm_heading"],
