@@ -916,7 +916,10 @@ def add_internal_hyperlink(paragraph, anchor, text, font_size_pt=8, color_hex="4
 # discs) and one concrete num that every bulleted paragraph references via numPr.
 # This renders filled dot bullets in Word / LibreOffice / Google Docs. Indent is
 # set per paragraph so the reference "ek line aage ek line piche" hierarchy holds.
-_DISC_NUM_ID = [None]      # cached concrete numId for the running document
+# The concrete numId is cached PER DOCUMENT (stored on the doc object) rather than
+# in a module global, so building more than one document in the same process keeps
+# working: each new docx.Document() re-registers its own abstractNum/num and its
+# bullets always render.
 
 
 def _twips(inches):
@@ -924,10 +927,13 @@ def _twips(inches):
 
 
 def _ensure_disc_numbering(doc):
-    """Register a disc-bullet abstractNum + num in the document's numbering part
-    (once per document) and return the concrete numId."""
-    if _DISC_NUM_ID[0] is not None:
-        return _DISC_NUM_ID[0]
+    """Register a disc-bullet abstractNum + num in this document's numbering part
+    (once per document) and return the concrete numId. The id is cached on the
+    doc object so a second document built in the same process re-registers its
+    own numbering and its bullets still render."""
+    cached = getattr(doc, "_disc_num_id", None)
+    if cached is not None:
+        return cached
     numbering = doc.part.numbering_part.element
     abstract_id = 9100            # high ids to avoid clashing with built-in styles
     num_id = 9101
@@ -947,7 +953,7 @@ def _ensure_disc_numbering(doc):
     numbering.append(parse_xml(
         f'<w:num {nsdecls("w")} w:numId="{num_id}">'
         f'<w:abstractNumId w:val="{abstract_id}"/></w:num>'))
-    _DISC_NUM_ID[0] = num_id
+    doc._disc_num_id = num_id
     return num_id
 
 
@@ -1084,7 +1090,7 @@ def account_text_height_in(item, acc_alarms, cur_start, cur_end, is_last):
     if not item.get("cur_detail"):
         h += _line_in(10) * 2 + sp["line"] * pt
     if item["tax_cost"] > 0:
-        h += _line_in(12) + sp["line"] * pt
+        h += _line_in(12) + sp["line"] * pt                        # 'Total Tax Cost ...' inner bullet (one line)
     h += _line_in(12) * _wrapped_lines(item["remark"], w - 0.37, 12) + sp["line"] * pt   # remark bullet
     h += _line_in(12) + sp["note"] * pt                            # 'No Activity ...' outer bullet (now 12pt)
     h += _line_in(14) + sp["alarm_heading"] * pt
@@ -1439,7 +1445,9 @@ def generate_docx_report(cost_data, alarm_rows, cur_start, cur_end, prev_start, 
                      size=10, italic=True, before=0, after=sp["line"], single=True)
 
         if item["tax_cost"] > 0:
-            add_text(doc, f"Total Tax Cost: {money(item['tax_cost'])}", before=0, after=sp["line"], single=True)
+            # Inner disc bullet (same indent as the two cost lines above), label plain + value bold.
+            add_bullet(doc, [("Total Tax Cost: ", False), (money(item['tax_cost']), True)],
+                       ilvl=1, left_in=0.94, hanging_in=0.25, size=12, before=0, after=sp["line"])
         add_bullet(doc, [(item["remark"], False)], ilvl=0, left_in=0.37, hanging_in=0.25,
                    size=12, before=0, after=sp["line"])
         add_bullet(doc, [("No Activity performed by Operisoft in this account.", True)], ilvl=0,

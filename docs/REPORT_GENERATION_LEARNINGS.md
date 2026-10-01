@@ -109,7 +109,8 @@ For each of the 20 accounts, in `No` order:
    - "Average Daily Cost: $X" - INNER (deeper) bullet, amount bold.
 5. Two cost images (overview, then breakdown), centered, auto-sized so the whole
    account fits one page (`plan_cost_images` + `account_text_height_in`).
-6. Optional "Total Tax Cost: $X" line when tax > 0 (plain text, not a bullet).
+6. Optional "Total Tax Cost: $X" line when tax > 0 - an INNER (deeper) disc
+   bullet at the same indent as the two cost lines, amount bold.
 7. The cost remark line (item["remark"], e.g. "The costs decreased/increased by
    ... due to ...") - an OUTER disc bullet, 12pt.
 8. "No Activity performed by Operisoft in this account." - an OUTER disc bullet,
@@ -155,6 +156,10 @@ Account-page body bullets:
   (Reference ind left ~1352 twips.)
 - "Average Daily Cost: $X": INNER bullet, `ilvl=1`, `left_in=0.94`,
   `hanging_in=0.25`, 12pt; label not bold, money bold.
+- "Total Tax Cost: $X" (only when `item["tax_cost"] > 0`): INNER bullet,
+  `ilvl=1`, `left_in=0.94`, `hanging_in=0.25`, 12pt; label not bold, the money
+  value bold (two segments), matching the two cost lines above it. In the
+  reference this is also a disc bullet at that same inner indent.
 - Cost remark: OUTER bullet, `ilvl=0`, `left_in=0.37`, `hanging_in=0.25`, 12pt,
   not bold.
 - "No Activity performed by Operisoft in this account.": OUTER bullet, `ilvl=0`,
@@ -328,6 +333,13 @@ helpers (`add_bullet`, `_ensure_disc_numbering`, `set_table_cell_margins`,
 `build_cover_page` structure, `build_branded_header`, or the watermark markup.
 The script must stay 100% self-contained and runnable in `--mock` mode without
 AWS credentials.
+
+Disc numbering is DOCUMENT-SCOPED: `_ensure_disc_numbering(doc)` caches the
+concrete numId on the doc object (`doc._disc_num_id`) instead of a module global,
+so each new `docx.Document()` re-registers its own `abstractNum`/`num` and the
+bullets always render. This makes `add_bullet` safe to reuse across more than
+one document in the same process (batch or test callers); the single-shot CLI
+behavior is unchanged.
 
 One-page-per-account fitting depends on `account_text_height_in` estimating the
 non-image height correctly. If you change body line sizes, spacing
