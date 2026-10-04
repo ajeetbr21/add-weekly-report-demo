@@ -1506,7 +1506,10 @@ def generate_docx_report(cost_data, alarm_rows, cur_start, cur_end, prev_start, 
         for r in p_name.runs:
             r.font.underline = True
         add_bookmark(p_name, f"_acc_{acc_id}")
-        add_text(doc, "-" * 128, size=9.5, bold=True, before=0, after=sp["dashes"], single=True)
+        # Separator rule under the account heading: CENTERED, and short enough to
+        # stay on ONE line (an over-long run wraps and looks left-aligned/ragged).
+        add_text(doc, "-" * 100, size=9.5, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER,
+                 before=0, after=sp["dashes"], single=True)
 
         # Body as disc bullets with the reference indent hierarchy:
         #   'Billing and Cost Overview' = outer (top-level) bullet, bold
