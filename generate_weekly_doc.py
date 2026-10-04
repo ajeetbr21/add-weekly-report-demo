@@ -1367,11 +1367,6 @@ def generate_docx_report(cost_data, alarm_rows, cur_start, cur_end, prev_start, 
     diff_tot = tot_cur - tot_prev
     direction = "decreased" if diff_tot <= 0 else "increased"
 
-    # Inline AWS partner cluster badge just above the summary heading (reference
-    # shows the real cluster image here, ~0.84 in wide). _add_centered_image
-    # skips gracefully if the asset is missing.
-    _add_centered_image(doc, "aws_partner_cluster.png", 0.84)
-
     p_h1 = add_text(doc, "Cost Summary Difference of All AWS Accounts", size=14, bold=True, color=NAVY,
                     before=0, after=2, single=True)
     add_bookmark(p_h1, "Summary")
