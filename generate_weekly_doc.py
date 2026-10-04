@@ -957,12 +957,56 @@ def _ensure_disc_numbering(doc):
     return num_id
 
 
+def _ensure_arrow_numbering(doc):
+    """Register an arrow-bullet abstractNum + num in this document's numbering
+    part (once per document) and return the concrete numId. Mirrors
+    _ensure_disc_numbering exactly, but ilvl 0 uses the arrow glyph U+2B9A (the
+    reference outer bullet, font 'Noto Sans Symbols') while ilvl 1+ stay solid
+    discs, so one definition covers both the outer-arrow and inner-disc levels.
+    The id is cached on the doc object so a second document built in the same
+    process re-registers its own numbering and its bullets still render."""
+    cached = getattr(doc, "_arrow_num_id", None)
+    if cached is not None:
+        return cached
+    numbering = doc.part.numbering_part.element
+    abstract_id = 9200            # high ids to avoid clashing with built-in styles
+    num_id = 9201
+    levels = ""
+    for i in range(3):
+        if i == 0:
+            glyph = "&#11162;"    # U+2B9A arrow (outer bullet)
+            fonts = ('<w:rFonts w:ascii="Noto Sans Symbols" w:hAnsi="Noto Sans Symbols" '
+                     'w:cs="Noto Sans Symbols" w:hint="default"/>')
+        else:
+            glyph = "&#9679;"     # U+25CF black circle (disc) for inner levels
+            fonts = '<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:hint="default"/>'
+        levels += (
+            f'<w:lvl w:ilvl="{i}">'
+            f'<w:start w:val="1"/><w:numFmt w:val="bullet"/>'
+            f'<w:lvlText w:val="{glyph}"/>'
+            f'<w:lvlJc w:val="left"/>'
+            f'<w:pPr><w:ind w:left="{720 * (i + 1)}" w:hanging="360"/></w:pPr>'
+            f'<w:rPr>{fonts}</w:rPr>'
+            f'</w:lvl>'
+        )
+    numbering.insert(0, parse_xml(
+        f'<w:abstractNum {nsdecls("w")} w:abstractNumId="{abstract_id}">'
+        f'<w:multiLevelType w:val="hybridMultilevel"/>{levels}</w:abstractNum>'))
+    numbering.append(parse_xml(
+        f'<w:num {nsdecls("w")} w:numId="{num_id}">'
+        f'<w:abstractNumId w:val="{abstract_id}"/></w:num>'))
+    doc._arrow_num_id = num_id
+    return num_id
+
+
 def add_bullet(doc, segments, ilvl=0, left_in=0.5, hanging_in=0.25, size=12,
-               before=0, after=4, single=True, keep_with_next=False):
-    """Add a disc-bullet paragraph. `segments` is a list of (text, bold) tuples
+               before=0, after=4, single=True, keep_with_next=False, glyph="disc"):
+    """Add a bullet paragraph. `segments` is a list of (text, bold) tuples
     so a line like 'Total cost for the week: $340.00' can bold just the amount.
-    `left_in`/`hanging_in` control the reference indent hierarchy."""
-    num_id = _ensure_disc_numbering(doc)
+    `left_in`/`hanging_in` control the reference indent hierarchy. `glyph`
+    selects the numbering: "disc" (default, solid dot) or "arrow" (outer arrow
+    U+2B9A at ilvl 0, disc at deeper levels) to match the reference."""
+    num_id = _ensure_arrow_numbering(doc) if glyph == "arrow" else _ensure_disc_numbering(doc)
     p = doc.add_paragraph()
     set_spacing(p, before, after, single, keep_with_next)
     pf = p.paragraph_format
@@ -1021,7 +1065,27 @@ def style_cell(cell, size, bold=False, align=WD_ALIGN_PARAGRAPH.LEFT, color=None
                 run.font.color.rgb = color
 
 
+def _set_total_cell(cell, arrow, arrow_color, amount):
+    """Build a Total-row money cell with an explicitly colored arrow run followed
+    by the black amount run. Used instead of style_cell for the two total cells
+    so the arrow keeps its own color while the amount stays black."""
+    cell.text = ""
+    p = cell.paragraphs[0]
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    set_spacing(p, before=0, after=0, single=True)
+    r_arrow = p.add_run(arrow)
+    r_arrow.font.name = "Arial"
+    r_arrow.font.size = Pt(8.5)
+    r_arrow.font.bold = True
+    r_arrow.font.color.rgb = arrow_color
+    r_amount = p.add_run(amount)
+    r_amount.font.name = "Arial"
+    r_amount.font.size = Pt(8.5)
+    r_amount.font.bold = True
+
+
 NAVY = RGBColor(0x1F, 0x48, 0x7C)
+RED = RGBColor(0xFF, 0x00, 0x00)
 
 # Account-page spacing (points). The page-fit estimate below uses the same numbers.
 ACC_SPACE_AFTER = {"banner": 2, "name": 2, "dashes": 4, "heading": 3, "line": 2, "avg": 4,
@@ -1303,6 +1367,11 @@ def generate_docx_report(cost_data, alarm_rows, cur_start, cur_end, prev_start, 
     diff_tot = tot_cur - tot_prev
     direction = "decreased" if diff_tot <= 0 else "increased"
 
+    # Inline AWS partner cluster badge just above the summary heading (reference
+    # shows the real cluster image here, ~0.84 in wide). _add_centered_image
+    # skips gracefully if the asset is missing.
+    _add_centered_image(doc, "aws_partner_cluster.png", 0.84)
+
     p_h1 = add_text(doc, "Cost Summary Difference of All AWS Accounts", size=14, bold=True, color=NAVY,
                     before=0, after=2, single=True)
     add_bookmark(p_h1, "Summary")
@@ -1338,6 +1407,12 @@ def generate_docx_report(cost_data, alarm_rows, cur_start, cur_end, prev_start, 
         for idx, c in enumerate(cells):
             style_cell(c, 7, align=WD_ALIGN_PARAGRAPH.CENTER if idx in (0, 2, 3, 4, 5) else WD_ALIGN_PARAGRAPH.LEFT,
                        before=0, after=0)
+        # Meaningful cost decrease: color BOTH the Last Week Cost (index 3) and
+        # Current Week Cost (index 5) cells red, matching the client reference.
+        # The Tax cell (index 4) always stays black.
+        if item["diff"] < -0.5:
+            style_cell(cells[3], 7, align=WD_ALIGN_PARAGRAPH.CENTER, before=0, after=0, color=RED)
+            style_cell(cells[5], 7, align=WD_ALIGN_PARAGRAPH.CENTER, before=0, after=0, color=RED)
 
     tot_row = table1.add_row()
     set_row_widths(tot_row, MASTER_COL_WIDTHS_IN)
@@ -1345,38 +1420,60 @@ def generate_docx_report(cost_data, alarm_rows, cur_start, cur_end, prev_start, 
     tot = tot_row.cells
     merged = tot[0].merge(tot[2])
     merged.text = "Total Cost"
-    tot[3].text = money(tot_prev)
     tot[4].text = money(tot_tax)
-    tot[5].text = f"{'⬇' if diff_tot <= 0 else '⬆'}{money(tot_cur)}"
-    for c in table1.rows[-1].cells:
+    # Both totals carry an arrow (reference): Last Week total always shows a RED
+    # up arrow ED0000 (the baseline the current week is compared against); the
+    # Current Week total shows a GREEN down arrow 00AF50 when the cost went down
+    # (diff_tot <= 0) or a RED up arrow when it went up. The amounts stay black.
+    _set_total_cell(tot[3], "\u2b06\ufe0f", RGBColor(0xED, 0x00, 0x00), money(tot_prev))
+    if diff_tot <= 0:
+        _set_total_cell(tot[5], "\u2b07\ufe0f", RGBColor(0x00, 0xAF, 0x50), money(tot_cur))
+    else:
+        _set_total_cell(tot[5], "\u2b06\ufe0f", RGBColor(0xED, 0x00, 0x00), money(tot_cur))
+    for idx, c in enumerate(table1.rows[-1].cells):
         set_cell_background(c, "D9E1F2")
-        style_cell(c, 8.5, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, before=0, after=0)
+        if idx in (3, 5):
+            # These two cells carry explicit per-run colors (arrow colored, amount
+            # black); only enforce spacing/alignment so style_cell does not repaint them.
+            for p in c.paragraphs:
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                set_spacing(p, before=0, after=0, single=True)
+        else:
+            style_cell(c, 8.5, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, before=0, after=0)
     doc.add_paragraph()
 
     # 3b. Cost summary bullets, now BELOW the master table (disc bullets, bold).
     for txt in (f"The billing for the current week ({cur_start:%d %B} to {cur_end:%d %B}) has {direction} compared to the previous week.",
                 f"The cost difference is ${abs(diff_tot):,.2f}."):
-        add_bullet(doc, [(txt, True)], ilvl=0, left_in=0.64, hanging_in=0.25, size=12, before=0, after=6)
+        add_bullet(doc, [(txt, True)], ilvl=0, left_in=0.64, hanging_in=0.25, size=12, before=0, after=6, glyph="arrow")
     doc.add_paragraph()
 
     # 4. Security links table
-    add_text(doc, "Security Best Practices Links:", size=12, bold=True)
+    add_text(doc, "security best practices: -", size=12, bold=True)
     table2 = doc.add_table(rows=1, cols=2)
     table2.alignment = WD_TABLE_ALIGNMENT.CENTER
     set_table_borders(table2)
     set_table_layout(table2, SECURITY_COL_WIDTHS_IN)
     for c, t in zip(table2.rows[0].cells, ("Content", "Link")):
         c.text = t
-        set_cell_background(c, "BEBEBE")
+        set_cell_background(c, "FFD600")   # yellow/gold header fill (reference)
         style_cell(c, 9, bold=True)
     for label, url in SECURITY_LINKS:
         row = table2.add_row()
         set_row_widths(row, SECURITY_COL_WIDTHS_IN)
         keep_row_on_one_page(row)
         cells = row.cells
-        cells[0].text, cells[1].text = label, url
-        for c in cells:
-            style_cell(c, 8.5)
+        # Content cell: plain black 8.5pt. Link cell: teal 467885 underlined run
+        # (same teal the internal hyperlinks use), matching the reference.
+        cells[0].text = label
+        style_cell(cells[0], 8.5)
+        p_link = cells[1].paragraphs[0]
+        set_spacing(p_link, before=1, after=1, single=True)
+        r_link = p_link.add_run(url)
+        r_link.font.name = "Arial"
+        r_link.font.size = Pt(8.5)
+        r_link.font.color.rgb = RGBColor(0x46, 0x78, 0x85)
+        r_link.font.underline = True
 
     # 5. One page per account
     alarms_by_acc = defaultdict(list)
@@ -1416,7 +1513,7 @@ def generate_docx_report(cost_data, alarm_rows, cur_start, cur_end, prev_start, 
         #   'Billing and Cost Overview' = outer (top-level) bullet, bold
         #   'Total cost ...' / 'Average Daily Cost ...' = inner (deeper) bullets, amount bold
         add_bullet(doc, [("Billing and Cost Overview", True)], ilvl=0, left_in=0.37,
-                   hanging_in=0.25, size=12, before=0, after=sp["heading"])
+                   hanging_in=0.25, size=12, before=0, after=sp["heading"], glyph="arrow")
         add_bullet(doc, [("Total cost for the week: ", False), (money(item['cur_cost']), True)],
                    ilvl=1, left_in=0.94, hanging_in=0.25, size=12, before=0, after=sp["line"])
         add_bullet(doc, [("Average Daily Cost: ", False), (money(item['avg_daily']), True)],
@@ -1449,9 +1546,9 @@ def generate_docx_report(cost_data, alarm_rows, cur_start, cur_end, prev_start, 
             add_bullet(doc, [("Total Tax Cost: ", False), (money(item['tax_cost']), True)],
                        ilvl=1, left_in=0.94, hanging_in=0.25, size=12, before=0, after=sp["line"])
         add_bullet(doc, [(item["remark"], False)], ilvl=0, left_in=0.37, hanging_in=0.25,
-                   size=12, before=0, after=sp["line"])
+                   size=12, before=0, after=sp["line"], glyph="arrow")
         add_bullet(doc, [("No Activity performed by Operisoft in this account.", True)], ilvl=0,
-                   left_in=0.37, hanging_in=0.25, size=12, before=0, after=sp["note"])
+                   left_in=0.37, hanging_in=0.25, size=12, before=0, after=sp["note"], glyph="arrow")
 
         add_text(doc, "Resource Utilization & Alarms", size=14, bold=True, before=0, after=sp["alarm_heading"],
                  single=True, keep_with_next=True)

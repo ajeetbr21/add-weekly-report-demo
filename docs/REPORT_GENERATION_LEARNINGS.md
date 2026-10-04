@@ -323,6 +323,75 @@ Visual acceptance checklist (compare against the reference renders):
 
 ---
 
+## 6b. Visual-fidelity details landed from the client reference
+
+These five styling details were extracted directly from the client reference
+docx and are now reproduced by `generate_docx_report` and its helpers. Use
+regular hyphens only - no em dashes.
+
+### Red cost values (decreased rows)
+
+A master-table data row's Last Week Cost cell (index 3) AND Current Week Cost
+cell (index 5) are colored red `FF0000` (module constant `RED`) when the row is
+a meaningful cost decrease, i.e. `item["diff"] < -0.5` (the same condition that
+produces the "The costs decreased by ..." remark). The Tax cell (index 4) and
+every other cell stay black. This is applied as a follow-up `style_cell(..,
+color=RED)` pass on just those two cells after the normal styling loop. Rows
+that increased or remain the same stay black.
+
+### Total Cost row arrows (both totals)
+
+Both totals in the Total row carry an arrow, built with explicit runs via the
+`_set_total_cell(cell, arrow, arrow_color, amount)` helper (NOT `style_cell`,
+which would repaint every run one color):
+- Last Week total: up-arrow emoji `U+2B06 U+FE0F` colored red `ED0000`, then the
+  amount in black. The Last Week total is the baseline, so its arrow is always
+  the red up arrow.
+- Current Week total: down-arrow emoji `U+2B07 U+FE0F` colored green `00AF50`
+  when the week went down (`diff_tot <= 0`), else the red up arrow `ED0000` when
+  it went up. The amount stays black.
+The arrows use the VS16 emoji presentation selector exactly as the reference.
+In the LibreOffice headless PDF these emoji may show as tofu because the emoji
+font is not available to LibreOffice; the authoritative renderer is Word /
+Google Docs. Verify the codepoints are present in `word/document.xml` rather
+than changing the glyph.
+
+### Security Best Practices table
+
+- Heading text is lowercase `security best practices: -` (trailing space-hyphen).
+- Header row ("Content" / "Link") cell fill is yellow/gold `FFD600` (not gray).
+- Each Link cell URL is an explicit run colored teal `467885` and underlined
+  (the same teal `add_internal_hyperlink` uses). The Content cell stays plain
+  black 8.5pt. The reference uses teal underlined links here, NOT green.
+
+### Arrow vs disc bullets
+
+`_ensure_arrow_numbering(doc)` mirrors `_ensure_disc_numbering(doc)` (same
+document-scoped caching, cached on `doc._arrow_num_id`; abstractNum id 9200,
+concrete numId 9201). Its ilvl 0 uses the arrow glyph `U+2B9A` (`&#11162;`, font
+"Noto Sans Symbols"); ilvl 1+ stay solid discs `U+25CF`. `add_bullet` takes a
+`glyph="disc"` (default) or `glyph="arrow"` parameter selecting which numbering
+to reference. All OUTER (`ilvl=0`) bullets now pass `glyph="arrow"` (the two
+summary-page lines, "Billing and Cost Overview", the cost-remark line, and the
+"No Activity performed by Operisoft in this account." line). INNER (`ilvl=1`)
+bullets keep the disc. Indents/sizes are unchanged. Like the Total-row emoji,
+the arrow glyph may show as tofu in LibreOffice (Noto Sans Symbols not available
+there); Word / Google Docs is authoritative. Verify `2B9A` / `&#11162;` and
+"Noto Sans Symbols" are present in `word/numbering.xml`.
+
+### Inline AWS partner cluster above the summary heading
+
+A centered `aws_partner_cluster.png` (~0.84 in wide) is inserted via
+`_add_centered_image` immediately BEFORE the "Cost Summary Difference of All AWS
+Accounts" heading, matching the reference extent. The "Summary" bookmark stays
+on the heading paragraph (it is not moved onto the image). `_add_centered_image`
+skips gracefully if the asset is missing, so there is no crash risk. The image
+is small enough that the master table still fits (header + 20 rows on the first
+summary page, Total row + the two bullets flowing onto the following page, which
+matches the reference split).
+
+---
+
 ## 7. Protected areas (do not break)
 
 Changes to layout should stay inside `generate_docx_report` and its small
