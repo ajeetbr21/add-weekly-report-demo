@@ -1356,9 +1356,9 @@ def generate_docx_report(cost_data, alarm_rows, cur_start, cur_end, prev_start, 
     # 0b. Branded cover page (page 1). The master cost table begins on page 2.
     build_cover_page(doc, cur_end)
 
-    # 1. Title
-    add_text(doc, f"Aptech Limited Weekly Status Report\n({cur_start:%d %B} to {cur_end:%d %B %Y})",
-             size=15, bold=True, color=NAVY, align=WD_ALIGN_PARAGRAPH.CENTER, before=0, after=2, single=True)
+    # (No page-2 title: the client reference starts the summary page directly at
+    # the "Cost Summary Difference of All AWS Accounts" heading. The report name
+    # and date range live only on the cover page.)
 
     # 2. Cost summary bullets
     tot_cur = sum(x["cur_cost"] for x in cost_data)
