@@ -1,139 +1,48 @@
-# Atlas — local-first multi-agent AI platform
+# Aptech Weekly Status Report Generator
 
-Atlas runs entirely on your machine with Docker Compose. Every request (Web UI, Telegram, scheduler, local
-API, webhooks) becomes the same **Task**. One orchestrator plans it, routes it to specialist agents,
-runs tools through MCP (a local MCP server + Composio), validates the results, journals everything in
-PostgreSQL, stores long-term memory in pgvector, and learns reusable procedures from your feedback.
+Ek self-contained Python script jo **Aptech Limited Weekly Status Report** ko
+branded Word (`.docx`) format mein generate karta hai — Operisoft branding, AWS
+cost summary table, per-account cost pages, charts aur CONFIDENTIAL watermark ke
+saath.
 
-```
-Telegram / Web UI / Scheduler / Webhooks / API
-                  │
-          FastAPI control plane ──► tasks table (queue) ──► worker ──► Orchestrator
-                                                                          │
-                     planner (LLM or rule-based) ── agent registry ── Research · Coding · AWS/DevOps · General
-                                                                          │
-                     OmniRoute (models)  ·  Tool Registry ─► MCP: local server, Composio (GitHub/AWS/Google)
-                                                                          │
-               validator ─► report ─► task journal ─► memory consolidation (pgvector) ─► feedback ─► learning
-```
+Report ka poora layout aur har design decision yahan documented hai:
+[`docs/REPORT_GENERATION_LEARNINGS.md`](docs/REPORT_GENERATION_LEARNINGS.md).
 
-![Dashboard](docs/screenshots/01-dashboard.png)
+## Contents
 
-## Quick start
+| File | Kya hai |
+|------|---------|
+| `generate_weekly_doc.py` | Main script (python-docx + boto3 + matplotlib) |
+| `docs/REPORT_GENERATION_LEARNINGS.md` | Report layout + generation ki poori guide |
+| `Aptech-Weekly-Status-Report-DEMO.docx` / `.pdf` | Demo report (sample output) |
+| `Aptech-Limited-Weekly-Status-Report_20260914_to_20260920.docx` / `.pdf` | Ek real date-range ki generated report |
 
-Requirements: Docker with Compose v2, ~8 GB RAM for Docker, ~10 GB disk (the OmniRoute and Letta images
-are large). On Windows use a WSL2 or Git Bash shell.
+## Requirements
 
-```bash
-git clone https://github.com/ajeetbr21/atlas.git && cd atlas
-scripts/bootstrap.sh --demo
-```
+- Python 3.9+
+- `pip install -r requirements.txt`
 
-That one command checks prerequisites, writes `.env` with freshly generated secrets (re-running never
-overwrites them), builds the images, starts all nine services, applies the migrations, waits for
-readiness, prints your API token and the status of every integration, and runs the end-to-end demo.
+## Usage
 
-Prefer to drive it with an AI assistant in your editor? [SETUP_PROMPT.md](SETUP_PROMPT.md) is a
-copy-paste prompt that does the whole install and verifies it. Or do it by hand:
+Mock mode (koi AWS credentials nahi chahiye — demo/test data use karta hai):
 
 ```bash
-cp .env.example .env    # set ATLAS_API_TOKEN, APPLICATION_SECRET, POSTGRES_PASSWORD
-docker compose up -d
+python3 generate_weekly_doc.py --mock --start 2026-09-14 --end 2026-09-20
 ```
 
-| URL (localhost only) | What |
-|---|---|
-| http://localhost:3000 | Web UI (dashboard) |
-| http://localhost:8000/docs | API (OpenAPI docs), `/health`, `/ready` |
-| http://localhost:20128 | OmniRoute dashboard: connect model providers, create an API key |
+Ye current directory mein ek `.docx` report likhta hai.
 
-Then run the end-to-end demo: `scripts/demo.sh`, or type
-*"Analyze today's AWS alarms and summarize anything that needs attention."* into the dashboard.
+> **Note:** Branding images (`aptech_logo.png`, `operisoft_logo_large.png`,
+> `operisoft_logo_header.png`, `aws_partner_badge.png`,
+> `aws_partner_cluster.png`) ek `assets/branding/` folder se padhi jaati hain.
+> Agar wo folder maujood nahi hai to script crash nahi hoti — wo logo/badge
+> images ko skip karke baaki report bana deti hai. Branded output ke liye wo 5
+> PNG files `assets/branding/` mein rakho.
 
-Everyday commands: `docker compose logs -f api worker`, `docker compose restart worker`,
-`docker compose down` (data stays in volumes; `down -v` deletes it). Details: [docs/setup.md](docs/setup.md).
+### PDF mein convert karna (optional)
 
-## What works without any credentials
+LibreOffice se:
 
-Atlas is fully usable before you connect anything external. Without a model provider the agents run in a
-clearly labelled **offline mode**: a rule-based planner/router and a deterministic tool selector that only
-executes tools whose arguments can be read directly from the request. Results say
-`Offline mode (no LLM available: …)`, and missing integrations are listed as `CONFIGURATION REQUIRED`
-instead of being faked.
-
-| Integration | Status out of the box | To enable |
-|---|---|---|
-| PostgreSQL + pgvector, migrations, task queue, journal, memory, learning, approvals, scheduler, webhooks, reports, Web UI | working | — |
-| Local MCP server (time, web fetch, workspace files, git summary, tests) | working | — |
-| Letta (session state) | working (`LETTA_ENABLED=true` in `.env.example`) | — |
-| OmniRoute model gateway | **CONFIGURATION REQUIRED** — needs a provider + API key | [setup](docs/setup.md#3-connect-a-model-provider-omniroute) |
-| Composio MCP (GitHub, AWS, Google) | **CONFIGURATION REQUIRED** | [tools](docs/tools.md#composio-mcp) |
-| Telegram bot | **CONFIGURATION REQUIRED** — needs a BotFather token | [telegram](docs/telegram.md) |
-
-## How it was verified
-
-The verification below ran in a Linux sandbox using **Podman 5.2 through its Docker-compatible API
-with the Docker Compose v2.39 CLI** (Docker itself was not available there). The compose file is
-standard.
-
-**Automated tests (65, all passing):** `scripts/with-test-db.sh bash -c 'cd backend && .venv/bin/pytest -q'`
-runs them against a real PostgreSQL 16 + pgvector container and a real in-process MCP server. The
-OpenAI-compatible model gateway, Letta, Telegram and the Telegram HTTP client are replaced by scripted
-test doubles where a test needs them. That covers LLM tool-calling loops, planning, and session blocks, but
-it does not show that a real model answers.
-
-**Full stack (`docker compose up`, all 9 services):** these passed.
-- The Section 49 demo through the real Web UI, driven by Playwright with no browser console errors. It covers
-  creating a task, reading the result and journal, giving feedback, approving the lesson, seeing a similar
-  task apply it, and approving a destructive action before it runs. [Screenshots](docs/screenshots/).
-- `scripts/e2e_demo.py`: 30 checks passed (journal events, tool records, memory, learning, approvals).
-- A task waiting for approval survived a restart of `api` and `worker`, then completed once approved.
-- The worker was killed with SIGKILL in the middle of a tool call. On restart it recovered the task,
-  marked the killed attempt `INTERRUPTED` and completed the task.
-- A task queued while the worker was stopped ran once the worker started.
-- PostgreSQL was restarted and the services reconnected. After a full `down`/`up`, all tasks, memories and
-  lessons were still there.
-- Schedules fire as normal tasks. Webhook redelivery is deduplicated.
-- Requests without a token or with a wrong one get 401. Cross-origin writes get 403. Unknown Host headers
-  and webhooks sent through the UI proxy are refused.
-- A real Letta 0.16.8 server stored session blocks. The local MCP server's 9 tools were discovered with
-  token authentication.
-
-**Real LLM path — verified** with a local Ollama server (`qwen2.5:1.5b`, CPU, no API key): the LLM planner
-produced the plan, the agent made a real OpenAI tool call, the tool returned real data and the model stated
-it — `offline: false`, `provider=omniroute`, 2 model calls, one `local:get_current_time` call. Reproduce it
-with `scripts/verify_llm.py`.
-
-**Not verified:**
-- A **hosted** model provider through OmniRoute. The container ran and Atlas reached it, but its bundled
-  free providers refused every request (HTTP 403/400/502) and no provider credentials were available. The
-  gateway path itself is the same OpenAI-compatible client that the Ollama run proved.
-- Composio and Telegram, because there were no credentials.
-
-How it was built, every design decision, and all 22 bugs found and fixed: **[AI.md](AI.md)**.
-
-## Documentation
-
-- **[AI.md](AI.md): build log — design reasoning, every bug found and fixed, full verification evidence**
-- [Architecture](docs/architecture.md): pipeline, services, data model, transactions, recovery
-- [Setup](docs/setup.md): install, configuration, development, tests
-- [Agents](docs/agents.md) · [Tools & MCP](docs/tools.md) · [Memory](docs/memory.md) · [Learning](docs/learning.md)
-- [Telegram](docs/telegram.md) · [API](docs/api.md) · [Troubleshooting](docs/troubleshooting.md)
-
-## Repository layout
-
-```
-docker-compose.yml        postgres, migrate, api, worker, mcp-local, telegram, frontend, omniroute, letta
-.env.example              every setting, no real credentials
-backend/app/              FastAPI app, worker, orchestrator, agents, tools, memory, learning, integrations
-backend/alembic/          database migrations
-backend/tests/            pytest suite (unit, integration, end-to-end, recovery)
-backend/scripts/          e2e_demo.py (runs inside the api container)
-frontend/                 React + TypeScript dashboard (Vite, served by nginx)
-docker/                   backend Dockerfile, postgres init
-scripts/                  bootstrap.sh (one-command install), demo.sh, verify_llm.py, ui_demo.py,
-                          with-test-db.sh, dev-db.sh
-docs/
-AI.md                     build log: decisions, bugs fixed, verification evidence
-SETUP_PROMPT.md           copy-paste prompt to have an AI assistant install it for you
+```bash
+soffice --headless --convert-to pdf --outdir . <report-file>.docx
 ```
