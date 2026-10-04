@@ -1487,9 +1487,13 @@ def generate_docx_report(cost_data, alarm_rows, cur_start, cur_end, prev_start, 
         p_banner.paragraph_format.page_break_before = True      # every account starts on a new page
         p_banner.alignment = WD_ALIGN_PARAGRAPH.CENTER
         set_spacing(p_banner, before=0, after=sp["banner"], single=True)
-        for txt, link in (("------------------------------------------------------- ", False),
+        # Balanced dashes on BOTH sides so the "Summary" back-link sits CENTERED
+        # (equal-length runs; the paragraph is center-aligned). Keep each side
+        # short enough that the whole banner fits one line and does not wrap
+        # (wrapping is what pushes "Summary" off-center).
+        for txt, link in (("-------------------------------------------- ", False),
                           ("Summary", True),
-                          (" -------------------------------------------------------", False)):
+                          (" --------------------------------------------", False)):
             if link:
                 add_internal_hyperlink(p_banner, "Summary", "Summary", font_size_pt=10, color_hex="1F487C", bold=True)
             else:
